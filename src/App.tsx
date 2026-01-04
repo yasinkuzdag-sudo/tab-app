@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as microsoftTeams from "@microsoft/teams-js";
 import { supabase } from "./lib/supabase";
+import { useLocation, useNavigate } from "react-router-dom";
 
 export default function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [ctx, setCtx] = useState<any>(null);
   const [err, setErr] = useState<string>("");
   const [token, setToken] = useState<string>("");
@@ -16,6 +20,9 @@ export default function App() {
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbSessionOk, setSbSessionOk] = useState<boolean>(false);
 
+  // ✅ Redirect loop engeli (tek sefer yönlendir)
+  const redirectedRef = useRef(false);
+
   useEffect(() => {
     (async () => {
       try {
@@ -27,19 +34,33 @@ export default function App() {
         setSbSessionOk(false);
         setStatus("Supabase session kontrol ediliyor...");
 
+        const isDashboard =
+          location.pathname === "/dashboard" || location.pathname.startsWith("/dashboard/");
+
         // 0) Zaten session varsa direkt devam et
         const { data: existingSess } = await supabase.auth.getSession();
         if (existingSess?.session?.access_token) {
           setStatus("Mevcut Supabase session bulundu. User doğrulanıyor...");
           const { data: u } = await supabase.auth.getUser();
+
           if (u?.user?.id) {
             setSbSessionOk(true);
             setSbUserId(u.user.id);
-            setStatus("Giriş zaten var ✅ Dashboard'a yönlendiriliyor...");
-            window.location.href = "/dashboard";
+
+            // ✅ Dashboard’da değilsek SPA navigate ile geç
+            if (!isDashboard && !redirectedRef.current) {
+              redirectedRef.current = true;
+              setStatus("Giriş zaten var ✅ Dashboard'a yönlendiriliyor...");
+              navigate("/dashboard", { replace: true });
+            } else {
+              setStatus("Giriş zaten var ✅");
+            }
             return;
           }
         }
+
+        // Eğer zaten dashboard’daysak ama session yoksa burada login flow’a girebilirsin.
+        // Şimdilik aynı akış devam ediyor.
 
         // 1) Teams initialize
         setStatus("Teams initialize...");
@@ -101,9 +122,7 @@ export default function App() {
         });
 
         if (!res.ok) {
-          setFnError(
-            `Edge Function non-2xx döndü. HTTP ${res.status}. (Body aşağıda)`
-          );
+          setFnError(`Edge Function non-2xx döndü. HTTP ${res.status}. (Body aşağıda)`);
           setStatus("Edge Function hata verdi.");
           return;
         }
@@ -150,8 +169,14 @@ export default function App() {
           setSbSessionOk(true);
           setSbUserId(userData.user.id);
 
-          setStatus("Giriş tamam ✅ Dashboard'a yönlendiriliyor...");
-          window.location.href = "/dashboard";
+          // ✅ Redirect loop engeli
+          if (!isDashboard && !redirectedRef.current) {
+            redirectedRef.current = true;
+            setStatus("Giriş tamam ✅ Dashboard'a yönlendiriliyor...");
+            navigate("/dashboard", { replace: true });
+          } else {
+            setStatus("Giriş tamam ✅");
+          }
           return;
         } else {
           setStatus("Token doğrulandı ama Supabase session dönmedi.");
@@ -165,7 +190,8 @@ export default function App() {
         setStatus("Hata oluştu.");
       }
     })();
-  }, []);
+    // navigate/location dependency ekliyoruz ki React Router uyarı vermesin
+  }, [navigate, location.pathname]);
 
   const dotCount = (token.match(/\./g) || []).length;
   const preview =
