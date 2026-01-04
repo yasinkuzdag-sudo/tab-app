@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import * as microsoftTeams from "@microsoft/teams-js";
 
@@ -12,7 +13,9 @@ if (!rootEl) {
 const render = () => {
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
-      <App />
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
     </React.StrictMode>
   );
 };
@@ -23,10 +26,10 @@ const render = () => {
     await microsoftTeams.app.initialize();
     console.log("✅ Teams initialized");
   } catch (e) {
-    // Tarayıcıda/Teams dışında normal: initialize başarısız olabilir
-    console.warn("⚠️ Teams initialize olmadı (browser mod). Render devam.", e);
+    // Browser / Vercel ortamı → normal
+    console.warn("⚠️ Teams initialize failed (browser mode). Render devam.", e);
   } finally {
-    // HER koşulda render et
+    // 🔥 Router + App HER ZAMAN render edilir
     render();
   }
 })();
