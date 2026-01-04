@@ -1,24 +1,41 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as microsoftTeams from "@microsoft/teams-js";
 import { supabase } from "./lib/supabase";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 
-function ProtectedRoute({ children }: { children: JSX.Element }) {
+// ✅ JSX namespace sorunu yok: React tipi kullan
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [ok, setOk] = useState(false);
 
   useEffect(() => {
+    let alive = true;
+
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      setOk(!!data?.session?.access_token);
-      setLoading(false);
+      try {
+        // ✅ session var mı yerine: user var mı (daha güvenli)
+        const { data, error } = await supabase.auth.getUser();
+        if (!alive) return;
+
+        if (error) {
+          setOk(false);
+        } else {
+          setOk(!!data?.user?.id);
+        }
+      } finally {
+        if (alive) setLoading(false);
+      }
     })();
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (loading) return <div style={{ padding: 24, fontFamily: "system-ui" }}>Yükleniyor...</div>;
   if (!ok) return <Navigate to="/" replace />;
-  return children;
+  return <>{children}</>;
 }
 
 function SSOPage() {
@@ -36,6 +53,7 @@ function SSOPage() {
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbSessionOk, setSbSessionOk] = useState<boolean>(false);
 
+  // 🔒 StrictMode / re-render loop engeli
   const startedRef = useRef(false);
   const redirectedRef = useRef(false);
 
@@ -56,7 +74,7 @@ function SSOPage() {
         const isDashboard =
           location.pathname === "/dashboard" || location.pathname.startsWith("/dashboard/");
 
-        // 0) Session varsa → dashboard
+        // ✅ Session varsa → Dashboard
         const { data: existingSess } = await supabase.auth.getSession();
         if (existingSess?.session?.access_token) {
           const { data: u } = await supabase.auth.getUser();
@@ -73,12 +91,13 @@ function SSOPage() {
           }
         }
 
-        // 1) Teams context
+        // ✅ Teams context (Teams dışındaysa düzgün mesaj)
         setStatus("Teams context kontrol ediliyor...");
         try {
+          // burada initialize yapmıyoruz; main.tsx zaten deniyor.
           const context = await microsoftTeams.app.getContext();
           setCtx(context);
-        } catch (e) {
+        } catch {
           setStatus("Teams içinde değil (browser mod). SSO akışı çalışmaz.");
           setFnError(
             "Bu sayfa Teams içinde çalışacak şekilde tasarlandı. Normal tarayıcıda Teams SSO token alınamaz."
