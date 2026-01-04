@@ -27,7 +27,7 @@ export default function App() {
         setSbSessionOk(false);
         setStatus("Supabase session kontrol ediliyor...");
 
-        // 0) Zaten session varsa direkt devam et (Teams tab tekrar açıldığında hızlandırır)
+        // 0) Zaten session varsa direkt devam et
         const { data: existingSess } = await supabase.auth.getSession();
         if (existingSess?.session?.access_token) {
           setStatus("Mevcut Supabase session bulundu. User doğrulanıyor...");
@@ -54,30 +54,62 @@ export default function App() {
         });
 
         setToken(t || "");
-
         if (!t) {
           setStatus("Token alınamadı.");
           return;
         }
 
-        // 3) Teams token -> Edge Function (teams-auth)
-        //    Beklenti: { ok:true, session:{access_token, refresh_token}, profile:{...} }
+        // 3) Teams token -> Edge Function (RAW FETCH + her durumda body oku)
         setStatus("Edge Function çağrılıyor (teams-auth)...");
-        const { data, error } = await supabase.functions.invoke("teams-auth", {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+          setFnError("VITE_SUPABASE_URL veya VITE_SUPABASE_ANON_KEY eksik (Vercel env).");
+          setStatus("Env eksik.");
+          return;
+        }
+
+        const fnUrl = `${SUPABASE_URL.replace(/\/$/, "")}/functions/v1/teams-auth`;
+
+        const res = await fetch(fnUrl, {
+          method: "POST",
           headers: {
-            "x-teams-token": t,
             "Content-Type": "application/json",
+            // Supabase Functions auth (anon ile)
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            // Teams token
+            "x-teams-token": t,
           },
-          body: {},
+          body: JSON.stringify({}),
         });
 
-        if (error) {
-          setFnError(error.message || String(error));
+        const raw = await res.text();
+        let parsed: any = null;
+        try {
+          parsed = raw ? JSON.parse(raw) : null;
+        } catch {
+          parsed = { raw };
+        }
+
+        // ✅ UI’da her koşulda göster
+        setFnResult({
+          httpStatus: res.status,
+          ok: res.ok,
+          body: parsed,
+        });
+
+        if (!res.ok) {
+          setFnError(
+            `Edge Function non-2xx döndü. HTTP ${res.status}. (Body aşağıda)`
+          );
           setStatus("Edge Function hata verdi.");
           return;
         }
 
-        setFnResult(data);
+        // Bundan sonrası: gerçek function payload’ı
+        const data = parsed;
 
         if (!data?.ok) {
           setFnError(data?.error || "Edge Function ok:false döndü.");
@@ -122,10 +154,9 @@ export default function App() {
           window.location.href = "/dashboard";
           return;
         } else {
-          // Session yoksa: Edge Function henüz A+C’nin “Auth session üret” kısmını yapmıyor demektir.
-          setStatus("Token doğrulandı ama Supabase session dönmedi (A+C'nin session kısmı eksik).");
+          setStatus("Token doğrulandı ama Supabase session dönmedi.");
           setFnError(
-            "Edge Function ok:true döndü ama response içinde session yok. A+C için function'ın Supabase Auth session üretip (access_token+refresh_token) döndürmesi gerekiyor."
+            "Edge Function ok:true döndü ama response içinde session yok. Function Supabase Auth session üretip (access_token+refresh_token) döndürmeli."
           );
           return;
         }
@@ -204,6 +235,7 @@ export default function App() {
             borderRadius: 8,
             overflow: "auto",
             maxHeight: 320,
+            whiteSpace: "pre-wrap",
           }}
         >
           {fnResult ? JSON.stringify(fnResult, null, 2) : "(henüz yok)"}
