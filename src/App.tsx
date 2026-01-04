@@ -18,6 +18,9 @@ export default function App() {
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbSessionOk, setSbSessionOk] = useState<boolean>(false);
 
+  // ✅ Teams login akışı gerçekten çalıştı mı? (session varken token bölümü görünmesin)
+  const [usedTeamsLogin, setUsedTeamsLogin] = useState<boolean>(false);
+
   // 🔒 Bu komponent mount olduğunda sadece 1 kez çalıştır (StrictMode double-run + route değişimi loop engeli)
   const startedRef = useRef(false);
 
@@ -32,6 +35,7 @@ export default function App() {
       try {
         setErr("");
         setToken("");
+        setUsedTeamsLogin(false);
         setFnError("");
         setFnResult(null);
         setSbUserId("");
@@ -89,6 +93,7 @@ export default function App() {
           return;
         }
 
+        setUsedTeamsLogin(true);
         setToken(t || "");
         if (!t) {
           setStatus("Token boş döndü.");
@@ -230,13 +235,15 @@ export default function App() {
         <b>Tenant ID:</b> {ctx?.app?.tenant?.id || "-"}
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <b>Token var mı?</b> {token ? "EVET ✅" : "HAYIR ❌"} <br />
-        <b>Token uzunluğu:</b> {token?.length || 0} <br />
-        <b>Nokta sayısı (JWT olmalı = 2):</b> {dotCount} <br />
-        <b>Preview:</b>{" "}
-        <span style={{ fontFamily: "monospace" }}>{preview || "(boş)"}</span>
-      </div>
+      {usedTeamsLogin && (
+        <div style={{ marginTop: 12 }}>
+          <b>Token var mı?</b> {token ? "EVET ✅" : "HAYIR ❌"} <br />
+          <b>Token uzunluğu:</b> {token?.length || 0} <br />
+          <b>Nokta sayısı (JWT olmalı = 2):</b> {dotCount} <br />
+          <b>Preview:</b>{" "}
+          <span style={{ fontFamily: "monospace" }}>{preview || "(boş)"}</span>
+        </div>
+      )}
 
       <div style={{ marginTop: 12 }}>
         <b>Supabase session OK?</b> {sbSessionOk ? "EVET ✅" : "HAYIR ❌"} <br />
