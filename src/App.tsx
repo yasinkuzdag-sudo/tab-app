@@ -11,19 +11,23 @@ export default function App() {
   const [err, setErr] = useState<string>("");
   const [token, setToken] = useState<string>("");
 
-  // ✅ Edge Function sonucu
   const [fnResult, setFnResult] = useState<any>(null);
   const [fnError, setFnError] = useState<string>("");
   const [status, setStatus] = useState<string>("Başlatılıyor...");
 
-  // ✅ Debug: Supabase session/user
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbSessionOk, setSbSessionOk] = useState<boolean>(false);
 
-  // ✅ Redirect loop engeli (tek sefer yönlendir)
+  // 🔒 Bu komponent mount olduğunda sadece 1 kez çalıştır (StrictMode double-run + route değişimi loop engeli)
+  const startedRef = useRef(false);
+
+  // 🔒 Yönlendirmeyi de 1 kere yap
   const redirectedRef = useRef(false);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     (async () => {
       try {
         setErr("");
@@ -35,52 +39,63 @@ export default function App() {
         setStatus("Supabase session kontrol ediliyor...");
 
         const isDashboard =
-          location.pathname === "/dashboard" || location.pathname.startsWith("/dashboard/");
+          location.pathname === "/dashboard" ||
+          location.pathname.startsWith("/dashboard/");
 
-        // 0) Zaten session varsa direkt devam et
+        // 0) Session varsa → sadece dashboard’a geç (loop yok)
         const { data: existingSess } = await supabase.auth.getSession();
         if (existingSess?.session?.access_token) {
-          setStatus("Mevcut Supabase session bulundu. User doğrulanıyor...");
           const { data: u } = await supabase.auth.getUser();
-
           if (u?.user?.id) {
             setSbSessionOk(true);
             setSbUserId(u.user.id);
+            setStatus("Giriş zaten var ✅");
 
-            // ✅ Dashboard’da değilsek SPA navigate ile geç
             if (!isDashboard && !redirectedRef.current) {
               redirectedRef.current = true;
-              setStatus("Giriş zaten var ✅ Dashboard'a yönlendiriliyor...");
               navigate("/dashboard", { replace: true });
-            } else {
-              setStatus("Giriş zaten var ✅");
             }
             return;
           }
         }
 
-        // Eğer zaten dashboard’daysak ama session yoksa burada login flow’a girebilirsin.
-        // Şimdilik aynı akış devam ediyor.
+        // 1) Teams context (Teams içinde değilse crash etmesin)
+        setStatus("Teams context kontrol ediliyor...");
+        let context: any = null;
 
-        // 1) Teams initialize
-        setStatus("Teams initialize...");
-        await microsoftTeams.app.initialize();
-        const context = await microsoftTeams.app.getContext();
-        setCtx(context);
-
-        // 2) Teams SSO token al
-        setStatus("Teams SSO token alınıyor...");
-        const t = await microsoftTeams.authentication.getAuthToken({
-          resources: ["api://04bb484d-7e39-4bcc-a231-c34579fa51a1"],
-        });
-
-        setToken(t || "");
-        if (!t) {
-          setStatus("Token alınamadı.");
+        try {
+          // main.tsx zaten initialize ediyor olabilir; burada sadece güvenli şekilde context almayı dene.
+          context = await microsoftTeams.app.getContext();
+          setCtx(context);
+        } catch (e) {
+          // Teams dışında normal: beyaz ekran yerine bilgilendir
+          setStatus("Teams içinde değil (browser mod). SSO akışı çalışmaz.");
+          setFnError(
+            "Bu sayfa Teams içinde çalışacak şekilde tasarlandı. Normal tarayıcıda Teams SSO token alınamaz."
+          );
           return;
         }
 
-        // 3) Teams token -> Edge Function (RAW FETCH + her durumda body oku)
+        // 2) Teams SSO token al
+        setStatus("Teams SSO token alınıyor...");
+        let t = "";
+        try {
+          t = await microsoftTeams.authentication.getAuthToken({
+            resources: ["api://04bb484d-7e39-4bcc-a231-c34579fa51a1"],
+          });
+        } catch (e: any) {
+          setStatus("Token alınamadı.");
+          setFnError(String(e?.message || e));
+          return;
+        }
+
+        setToken(t || "");
+        if (!t) {
+          setStatus("Token boş döndü.");
+          return;
+        }
+
+        // 3) Edge Function çağır
         setStatus("Edge Function çağrılıyor (teams-auth)...");
         const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
         const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -97,10 +112,8 @@ export default function App() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            // Supabase Functions auth (anon ile)
             apikey: SUPABASE_ANON_KEY,
             Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            // Teams token
             "x-teams-token": t,
           },
           body: JSON.stringify({}),
@@ -114,7 +127,6 @@ export default function App() {
           parsed = { raw };
         }
 
-        // ✅ UI’da her koşulda göster
         setFnResult({
           httpStatus: res.status,
           ok: res.ok,
@@ -127,7 +139,6 @@ export default function App() {
           return;
         }
 
-        // Bundan sonrası: gerçek function payload’ı
         const data = parsed;
 
         if (!data?.ok) {
@@ -136,9 +147,10 @@ export default function App() {
           return;
         }
 
-        // 4) Function session döndürüyorsa Supabase session set et
+        // 4) Session set et
         if (data?.session?.access_token && data?.session?.refresh_token) {
           setStatus("Supabase session set ediliyor...");
+
           const { error: setSessErr } = await supabase.auth.setSession({
             access_token: data.session.access_token,
             refresh_token: data.session.refresh_token,
@@ -150,7 +162,6 @@ export default function App() {
             return;
           }
 
-          // 5) supabase.auth.getUser() kontrol
           setStatus("Session doğrulanıyor (supabase.auth.getUser)...");
           const { data: userData, error: userErr } = await supabase.auth.getUser();
 
@@ -168,30 +179,26 @@ export default function App() {
 
           setSbSessionOk(true);
           setSbUserId(userData.user.id);
+          setStatus("Giriş tamam ✅");
 
-          // ✅ Redirect loop engeli
           if (!isDashboard && !redirectedRef.current) {
             redirectedRef.current = true;
-            setStatus("Giriş tamam ✅ Dashboard'a yönlendiriliyor...");
             navigate("/dashboard", { replace: true });
-          } else {
-            setStatus("Giriş tamam ✅");
           }
           return;
-        } else {
-          setStatus("Token doğrulandı ama Supabase session dönmedi.");
-          setFnError(
-            "Edge Function ok:true döndü ama response içinde session yok. Function Supabase Auth session üretip (access_token+refresh_token) döndürmeli."
-          );
-          return;
         }
+
+        setStatus("Token doğrulandı ama Supabase session dönmedi.");
+        setFnError(
+          "Edge Function ok:true döndü ama response içinde session yok. Function session üretip dönmeli."
+        );
       } catch (e: any) {
         setErr(String(e?.message || e));
         setStatus("Hata oluştu.");
       }
     })();
-    // navigate/location dependency ekliyoruz ki React Router uyarı vermesin
-  }, [navigate, location.pathname]);
+    // ❗ dependency yok: 1 kere çalışsın (loop yok)
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dotCount = (token.match(/\./g) || []).length;
   const preview =
