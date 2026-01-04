@@ -1,9 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import * as microsoftTeams from "@microsoft/teams-js";
 import { supabase } from "./lib/supabase";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import Dashboard from "./pages/Dashboard";
 
-export default function App() {
+function ProtectedRoute({ children }: { children: JSX.Element }) {
+  const [loading, setLoading] = useState(true);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      setOk(!!data?.session?.access_token);
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) return <div style={{ padding: 24, fontFamily: "system-ui" }}>Yükleniyor...</div>;
+  if (!ok) return <Navigate to="/" replace />;
+  return children;
+}
+
+function SSOPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -18,13 +36,7 @@ export default function App() {
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbSessionOk, setSbSessionOk] = useState<boolean>(false);
 
-  // ✅ Teams login akışı gerçekten çalıştı mı? (session varken token bölümü görünmesin)
-  const [usedTeamsLogin, setUsedTeamsLogin] = useState<boolean>(false);
-
-  // 🔒 Bu komponent mount olduğunda sadece 1 kez çalıştır (StrictMode double-run + route değişimi loop engeli)
   const startedRef = useRef(false);
-
-  // 🔒 Yönlendirmeyi de 1 kere yap
   const redirectedRef = useRef(false);
 
   useEffect(() => {
@@ -35,7 +47,6 @@ export default function App() {
       try {
         setErr("");
         setToken("");
-        setUsedTeamsLogin(false);
         setFnError("");
         setFnResult(null);
         setSbUserId("");
@@ -43,10 +54,9 @@ export default function App() {
         setStatus("Supabase session kontrol ediliyor...");
 
         const isDashboard =
-          location.pathname === "/dashboard" ||
-          location.pathname.startsWith("/dashboard/");
+          location.pathname === "/dashboard" || location.pathname.startsWith("/dashboard/");
 
-        // 0) Session varsa → sadece dashboard’a geç (loop yok)
+        // 0) Session varsa → dashboard
         const { data: existingSess } = await supabase.auth.getSession();
         if (existingSess?.session?.access_token) {
           const { data: u } = await supabase.auth.getUser();
@@ -63,16 +73,12 @@ export default function App() {
           }
         }
 
-        // 1) Teams context (Teams içinde değilse crash etmesin)
+        // 1) Teams context
         setStatus("Teams context kontrol ediliyor...");
-        let context: any = null;
-
         try {
-          // main.tsx zaten initialize ediyor olabilir; burada sadece güvenli şekilde context almayı dene.
-          context = await microsoftTeams.app.getContext();
+          const context = await microsoftTeams.app.getContext();
           setCtx(context);
         } catch (e) {
-          // Teams dışında normal: beyaz ekran yerine bilgilendir
           setStatus("Teams içinde değil (browser mod). SSO akışı çalışmaz.");
           setFnError(
             "Bu sayfa Teams içinde çalışacak şekilde tasarlandı. Normal tarayıcıda Teams SSO token alınamaz."
@@ -80,7 +86,7 @@ export default function App() {
           return;
         }
 
-        // 2) Teams SSO token al
+        // 2) Token al
         setStatus("Teams SSO token alınıyor...");
         let t = "";
         try {
@@ -93,14 +99,13 @@ export default function App() {
           return;
         }
 
-        setUsedTeamsLogin(true);
         setToken(t || "");
         if (!t) {
           setStatus("Token boş döndü.");
           return;
         }
 
-        // 3) Edge Function çağır
+        // 3) Edge Function
         setStatus("Edge Function çağrılıyor (teams-auth)...");
         const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
         const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -132,11 +137,7 @@ export default function App() {
           parsed = { raw };
         }
 
-        setFnResult({
-          httpStatus: res.status,
-          ok: res.ok,
-          body: parsed,
-        });
+        setFnResult({ httpStatus: res.status, ok: res.ok, body: parsed });
 
         if (!res.ok) {
           setFnError(`Edge Function non-2xx döndü. HTTP ${res.status}. (Body aşağıda)`);
@@ -152,7 +153,7 @@ export default function App() {
           return;
         }
 
-        // 4) Session set et
+        // 4) Session set
         if (data?.session?.access_token && data?.session?.refresh_token) {
           setStatus("Supabase session set ediliyor...");
 
@@ -194,16 +195,13 @@ export default function App() {
         }
 
         setStatus("Token doğrulandı ama Supabase session dönmedi.");
-        setFnError(
-          "Edge Function ok:true döndü ama response içinde session yok. Function session üretip dönmeli."
-        );
+        setFnError("Edge Function ok:true döndü ama response içinde session yok.");
       } catch (e: any) {
         setErr(String(e?.message || e));
         setStatus("Hata oluştu.");
       }
     })();
-    // ❗ dependency yok: 1 kere çalışsın (loop yok)
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // sadece 1 kez
 
   const dotCount = (token.match(/\./g) || []).length;
   const preview =
@@ -235,33 +233,18 @@ export default function App() {
         <b>Tenant ID:</b> {ctx?.app?.tenant?.id || "-"}
       </div>
 
-      {usedTeamsLogin && (
-        <div style={{ marginTop: 12 }}>
-          <b>Token var mı?</b> {token ? "EVET ✅" : "HAYIR ❌"} <br />
-          <b>Token uzunluğu:</b> {token?.length || 0} <br />
-          <b>Nokta sayısı (JWT olmalı = 2):</b> {dotCount} <br />
-          <b>Preview:</b>{" "}
-          <span style={{ fontFamily: "monospace" }}>{preview || "(boş)"}</span>
-        </div>
-      )}
+      <div style={{ marginTop: 12 }}>
+        <b>Token var mı?</b> {token ? "EVET ✅" : "HAYIR ❌"} <br />
+        <b>Token uzunluğu:</b> {token?.length || 0} <br />
+        <b>Nokta sayısı (JWT olmalı = 2):</b> {dotCount} <br />
+        <b>Preview:</b>{" "}
+        <span style={{ fontFamily: "monospace" }}>{preview || "(boş)"}</span>
+      </div>
 
       <div style={{ marginTop: 12 }}>
         <b>Supabase session OK?</b> {sbSessionOk ? "EVET ✅" : "HAYIR ❌"} <br />
         <b>Supabase user id:</b>{" "}
         <span style={{ fontFamily: "monospace" }}>{sbUserId || "-"}</span>
-      </div>
-
-      <div style={{ marginTop: 12 }}>
-        <button
-          onClick={() => {
-            if (!token) return;
-            navigator.clipboard.writeText(token);
-            alert("Token kopyalandı");
-          }}
-          disabled={!token}
-        >
-          Token'ı kopyala
-        </button>
       </div>
 
       <div style={{ marginTop: 16 }}>
@@ -282,5 +265,22 @@ export default function App() {
         </pre>
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<SSOPage />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
